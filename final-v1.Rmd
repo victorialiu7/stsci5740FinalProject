@@ -1,0 +1,292 @@
+---
+title: "final"
+author: "Group 9"
+date: "2024-05-03"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+calculate_accuracy_with_tolerance <- function(predictions, actual, tolerance) {
+  # Ensure both inputs are numeric
+  if(is.factor(predictions)) {
+    predictions <- as.numeric(as.character(predictions))
+  }
+  if(is.factor(actual)) {
+    actual <- as.numeric(as.character(actual))
+  }
+  
+  # Calculate accuracy with tolerance
+  correct_predictions <- abs(predictions - actual) <= tolerance
+  accuracy <- sum(correct_predictions) / length(actual) * 100
+  return(accuracy)
+}
+```
+
+```{r}
+set.seed(2)
+
+# Reading dataset
+# Load data
+wine_quality <- read.csv("/Users/a./Downloads/wine-quality-white-and-red.csv")
+
+# Convert quality to a factor
+wine_quality$quality <- as.factor(wine_quality$quality)
+
+library(caret)
+
+# One-hot encoding for the 'type' column
+dummies <- dummyVars(~ type, data = wine_quality)
+wine_quality_transformed <- predict(dummies, newdata = wine_quality)
+wine_quality <- cbind(wine_quality[, !(names(wine_quality) %in% "type")], wine_quality_transformed)
+
+# Scale data excluding the quality and one-hot encoded columns
+preProcValues <- preProcess(wine_quality[, !names(wine_quality) %in% c("quality", "type.red", "type.white")], method = c("center", "scale"))
+wine_quality[, !names(wine_quality) %in% c("quality", "type.red", "type.white")] <- predict(preProcValues, wine_quality[, !names(wine_quality) %in% c("quality", "type.red", "type.white")])
+
+# Creating interaction terms
+wine_quality$interaction1 <- with(wine_quality, total.sulfur.dioxide * free.sulfur.dioxide)
+wine_quality$interaction2 <- with(wine_quality, alcohol * volatile.acidity)
+
+# Polynomial features
+wine_quality$fixed.acidity2 <- wine_quality$fixed.acidity^2
+wine_quality$citric.acid2 <- wine_quality$citric.acid^2
+
+# Splitting data into training, validation, and test set
+set.seed(123) # Set seed for reproducibility
+n <- nrow(wine_quality)
+train_index <- sample(1:n, 0.7 * n)
+remaining_index <- setdiff(1:n, train_index)
+val_index <- sample(remaining_index, 0.15 * n)
+test_index <- setdiff(remaining_index, val_index)
+
+train <- wine_quality[train_index, ]
+validation <- wine_quality[val_index, ]
+test <- wine_quality[test_index, ]
+
+calculate_accuracy <- function(predictions, actual) {
+  correct_predictions <- predictions == actual
+  accuracy <- sum(correct_predictions) / length(actual) * 100
+  return(accuracy)
+}
+# Model Fitting without huyper parameter tunning
+# Logistic Regression
+library(nnet)
+logistic_fit <- multinom(quality ~ ., data = train)
+logistic_pred_validation <- predict(logistic_fit, validation, type = "class")
+cat("Logistic Regression Accuracy: ", calculate_accuracy(logistic_pred_validation, validation$quality), "\n")
+cat("Logistic Regression Accuracy with Tolerance 1.0: ", calculate_accuracy_with_tolerance(logistic_pred_validation, validation$quality, 1.0), "%\n")
+
+# Random Forest
+library(randomForest)
+rf_fit <- randomForest(quality ~ ., data = train, ntree = 100)
+rf_pred_validation <- predict(rf_fit, validation)
+cat("Random Forest Accuracy: ", calculate_accuracy(rf_pred_validation, validation$quality), "\n")
+
+cat("Random Forest Accuracy with Tolerance 1.0: ", calculate_accuracy_with_tolerance(rf_pred_validation, validation$quality, 1.0), "%\n")
+
+# Support Vector Machine
+library(e1071)
+svm_pred_validation <- predict(svm_fit, validation)
+cat("SVM Accuracy: ", calculate_accuracy(svm_pred_validation, validation$quality), "\n")
+
+cat("SVM Accuracy with Tolerance 1.0: ", calculate_accuracy_with_tolerance(svm_pred_validation, validation$quality, 1.0), "%\n")
+```
+
+
+```{r}
+library(caret)
+library(nnet)  
+
+train_scaled <- predict(preProcValues, train[, -ncol(train)])
+validation_scaled <- predict(preProcValues, validation[, -ncol(train)])
+
+# Add scaled data back to datasets
+train_scaled <- cbind(train_scaled, quality = train$quality)
+validation_scaled <- cbind(validation_scaled, quality = validation$quality)
+
+train_control <- trainControl(
+  method = "cv",
+  number = 10,  # Number of cross-validation folds
+  savePredictions = "final",
+  verboseIter = FALSE
+)
+
+
+decay_grid <- expand.grid(decay = c(0.01, 0.05, 0.1, 0.5))
+
+logistic_model <- train(
+  quality ~ ., 
+  data = train_scaled, 
+  method = "multinom",  # Using multinomial logistic regression from nnet
+  trControl = train_control, 
+  tuneGrid = decay_grid,
+  maxit = 200  # Max iterations for convergence
+)
+
+
+logistic_pred_validation <- predict(logistic_model, validation_scaled)
+
+basic_accuracy <- calculate_accuracy_with_tolerance(logistic_pred_validation, validation_scaled$quality, 0)
+accuracy_tolerance_10 <- calculate_accuracy_with_tolerance(logistic_pred_validation, validation_scaled$quality, 1.0)
+
+cat("Tuned Logistic Regression Accuracy: ", basic_accuracy, "%\n")
+cat("Tuned Logistic Regression Accuracy with Tolerance 1.0: ", accuracy_tolerance_10, "%\n")
+
+lr_accuracy_tolerance_0 <- basic_accuracy
+lr_accuracy_tolerance_1 <- accuracy_tolerance_10
+
+
+```
+
+
+```{r}
+# Fine tuning random forest
+library(caret)
+library(lattice)
+library(ggplot2)
+fitControl <- trainControl(
+  method = "cv",          # Use k-fold cross-validation
+  number = 10,            # Number of folds
+  savePredictions = "final",
+  verboseIter = FALSE,
+  allowParallel = TRUE   # Allow parallel processing
+)
+
+rfGrid <- expand.grid(
+  mtry = c(2, sqrt(ncol(train) - 1), round(ncol(train)/3)) 
+)
+
+rfModel <- train(
+  quality ~ .,                # formula
+  data = train,               # training data
+  method = "rf",              # model type
+  trControl = fitControl,     # training control
+  tuneGrid = rfGrid,          # the tuning grid
+  metric = "Accuracy"         # performance metric
+)
+
+predictions <- predict(rfModel, newdata = validation)
+
+validation_accuracy <- calculate_accuracy_with_tolerance(predictions, validation$quality, 0)
+
+validation_accuracy_tolerance_10 <- calculate_accuracy_with_tolerance(predictions, validation$quality, 1.0)
+
+cat("Validation Accuracy:", validation_accuracy, "%\n")
+cat("Validation Accuracy with Tolerance 1.0:", validation_accuracy_tolerance_10, "%\n")
+rf_accuracy_tolerance_0 <- validation_accuracy
+rf_accuracy_tolerance_1 <- validation_accuracy_tolerance_10
+
+```
+
+```{r}
+# Fine tuning SVM
+
+library(e1071)
+
+tuning_grid <- expand.grid(cost = seq(5, 15, by = 2), gamma = c(0.75, 1, 1.25))
+
+accuracies <- data.frame(cost = numeric(), gamma = numeric(), accuracy_0 = numeric(), accuracy_1 = numeric())
+
+for(i in 1:nrow(tuning_grid)) {
+  svm_fit <- svm(quality ~ ., data = train, type = "C-classification", kernel = "radial",
+                 cost = tuning_grid$cost[i], gamma = tuning_grid$gamma[i])
+  svm_pred_validation <- predict(svm_fit, validation)
+  accuracy_0 <- calculate_accuracy_with_tolerance(svm_pred_validation, validation$quality, 0)
+  accuracy_1 <- calculate_accuracy_with_tolerance(svm_pred_validation, validation$quality, 1)
+  
+  accuracies <- rbind(accuracies, data.frame(cost = tuning_grid$cost[i], gamma = tuning_grid$gamma[i], 
+                                             accuracy_0 = accuracy_0, accuracy_1 = accuracy_1))
+}
+
+best_settings_0 <- accuracies[which.max(accuracies$accuracy_0),]
+best_settings_1 <- accuracies[which.max(accuracies$accuracy_1),]
+print(paste("Best settings for accuracy_0: Cost=", best_settings_0$cost, "Gamma=", best_settings_0$gamma, "with Accuracy=", best_settings_0$accuracy_0))
+print(paste("Best settings for accuracy_1: Cost=", best_settings_1$cost, "Gamma=", best_settings_1$gamma, "with Accuracy=", best_settings_1$accuracy_1))
+
+svm_accuracy_tolerance_0 <-best_settings_0$accuracy_0
+svm_accuracy_tolerance_1 <- best_settings_1$accuracy_1
+
+```
+
+
+
+```{r}
+
+library(xgboost)
+train[, -ncol(train)] <- sapply(train[, -ncol(train)], as.numeric)
+validation[, -ncol(validation)] <- sapply(validation[, -ncol(validation)], function(x) {
+  if(is.factor(x) || is.character(x)) as.numeric(as.character(x)) else x
+})
+train_labels <- as.numeric(as.character(train$quality)) - 1  
+
+validation_labels <- as.numeric(as.factor(validation$quality)) - 1
+
+unique_train_labels <- sort(unique(train_labels))
+unique_validation_labels <- sort(unique(validation_labels))
+num_classes <- max(c(unique_train_labels, unique_validation_labels)) + 1  # max label + 1
+
+train_matrix <- xgb.DMatrix(data = as.matrix(train[, -ncol(train)]), label = train_labels)
+validation_matrix <- xgb.DMatrix(data = as.matrix(validation[, -ncol(validation)]), label = validation_labels)
+
+params <- list(
+    booster = "gbtree",
+    objective = "multi:softmax",
+    num_class = num_classes,
+    eval_metric = "mlogloss",
+    eta = 0.1,
+    max_depth = 6,
+    subsample = 0.8,
+    colsample_bytree = 0.8,
+    min_child_weight = 1
+)
+
+# Training with XGBoost
+xgb_fit <- xgb.train(
+    params = params,
+    data = train_matrix,
+    nrounds = 100,
+    watchlist = list(train = train_matrix, eval = validation_matrix),
+    early_stopping_rounds = 10
+)
+
+predictions <- predict(xgb_fit, validation_matrix)
+
+xgb_accuracy_tolerance_0 <- calculate_accuracy_with_tolerance(predictions, validation_labels, 0)
+xgb_accuracy_tolerance_1 <- calculate_accuracy_with_tolerance(predictions, validation_labels, 1)
+
+cat("Accuracy with Tolerance 0: ", xgb_accuracy_tolerance_0, "%\n")
+cat("Accuracy with Tolerance 1: ", xgb_accuracy_tolerance_1, "%\n")
+
+```
+
+
+```{r}
+model_data <- data.frame(
+  Model = rep(c("Random Forest", "SVM", "Logistic Regression", "XGBoost"), each = 2),
+  Tolerance = rep(c("Tolerance 0", "Tolerance 1"), times = 4),
+  Accuracy = c(
+    rf_accuracy_tolerance_0, rf_accuracy_tolerance_1,
+    svm_accuracy_tolerance_0, svm_accuracy_tolerance_1,
+    lr_accuracy_tolerance_0, lr_accuracy_tolerance_1,
+    xgb_accuracy_tolerance_0, xgb_accuracy_tolerance_1
+  )
+)
+```
+
+```{r}
+library(ggplot2)
+
+# Plotting the accuracies
+ggplot(model_data, aes(x = Model, y = Accuracy, fill = Tolerance)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Model Accuracy by Tolerance Level",
+       x = "Model",
+       y = "Accuracy (%)",
+       fill = "Tolerance Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
