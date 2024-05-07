@@ -143,7 +143,7 @@ lr_accuracy_tolerance_1 <- accuracy_tolerance_10
 
 
 ```{r}
-# Fine tuning random forest
+# hyperparameter tuning random forest
 library(caret)
 library(lattice)
 library(ggplot2)
@@ -182,7 +182,7 @@ rf_accuracy_tolerance_1 <- validation_accuracy_tolerance_10
 ```
 
 ```{r}
-# Fine tuning SVM
+# hyperparameter tuning SVM
 
 library(e1071)
 
